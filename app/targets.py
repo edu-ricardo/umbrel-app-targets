@@ -9,6 +9,7 @@ Uso:
   python3 targets.py [PASTA]                 # tabela no terminal
   python3 targets.py [PASTA] --format csv    # também: markdown, json
   python3 targets.py [PASTA] --serve         # página web na porta 8080
+  python3 targets.py [PASTA] --serve --db targets.db   # onde guardar domínio e subdomínios
 
 PASTA é a app-data do Umbrel (/home/umbrel/umbrel/app-data). Sem ela, usa a
 variável UMBREL_APP_DATA ou a pasta atual. Só usa a biblioteca padrão do Python.
@@ -20,12 +21,16 @@ import io
 import json
 import os
 import re
+import sqlite3
 import sys
 import traceback
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
+APP_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 GALLERY_ICON = "https://getumbrel.github.io/umbrel-apps-gallery/{id}/icon.svg"
 
 
@@ -175,9 +180,54 @@ def render(apps, fmt, host):
     return "\n".join([fmt_row(header), fmt_row(["-" * w for w in widths])] + [fmt_row(r) for r in rows])
 
 
-def serve(app_data, port):
+def connect(path):
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS hostnames (app_id TEXT PRIMARY KEY, hostname TEXT NOT NULL)")
+    return db
+
+
+def load_config(db):
+    row = db.execute("SELECT value FROM settings WHERE key = 'domain'").fetchone()
+    return {"domain": row[0] if row else "",
+            "hostnames": dict(db.execute("SELECT app_id, hostname FROM hostnames"))}
+
+
+def _hostname(value):
+    """Hostname normalizado; "" significa apagar. Levanta ValueError se inválido."""
+    value = str(value).strip().lower()
+    if value and not HOSTNAME_RE.match(value):
+        raise ValueError(f"hostname inválido: {value}")
+    return value
+
+
+def save_domain(db, value):
+    value = _hostname(value)
+    with db:
+        if value:
+            db.execute("INSERT OR REPLACE INTO settings VALUES ('domain', ?)", (value,))
+        else:
+            db.execute("DELETE FROM settings WHERE key = 'domain'")
+
+
+def save_hostname(db, app_id, value):
+    if not APP_ID_RE.match(app_id):
+        raise ValueError(f"id de app inválido: {app_id}")
+    value = _hostname(value)
+    with db:
+        if value:
+            db.execute("INSERT OR REPLACE INTO hostnames VALUES (?, ?)", (app_id, value))
+        else:
+            db.execute("DELETE FROM hostnames WHERE app_id = ?", (app_id,))
+
+
+def make_server(app_data, port, db_path):
+    connect(db_path).close()  # cria as tabelas na subida
+
     class Handler(BaseHTTPRequestHandler):
-        def _send(self, code, body, content_type):
+        def _send(self, code, body, content_type="application/json; charset=utf-8"):
+            if not isinstance(body, (str, bytes)):
+                body = json.dumps(body, ensure_ascii=False)
             data = body.encode("utf-8") if isinstance(body, str) else body
             self.send_response(code)
             self.send_header("Content-Type", content_type)
@@ -186,14 +236,25 @@ def serve(app_data, port):
             self.end_headers()
             self.wfile.write(data)
 
+        def _guarded(self, fn):
+            try:
+                self._send(200, fn())
+            except ValueError as e:
+                self._send(400, {"error": str(e)})
+            except Exception as e:
+                traceback.print_exc()
+                self._send(500, {"error": str(e)})
+
+        def _config(self):
+            with closing(connect(db_path)) as db:
+                return load_config(db)
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/api/apps":
-                try:
-                    self._send(200, json.dumps(scan(app_data), ensure_ascii=False), "application/json; charset=utf-8")
-                except Exception as e:
-                    traceback.print_exc()
-                    self._send(500, json.dumps({"error": str(e)}), "application/json; charset=utf-8")
+                self._guarded(lambda: scan(app_data))
+            elif path == "/api/config":
+                self._guarded(self._config)
             elif path == "/health":
                 self._send(200, "ok", "text/plain")
             elif path in ("/", "/index.html"):
@@ -201,11 +262,39 @@ def serve(app_data, port):
             else:
                 self._send(404, "not found", "text/plain")
 
+        def do_PUT(self):
+            path = self.path.split("?", 1)[0]
+            m = re.fullmatch(r"/api/hostnames/([^/]+)", path)
+            if path != "/api/domain" and not m:
+                return self._send(404, {"error": "not found"})
+            # Só JSON: o preflight do navegador impede escrita vinda de outros sites
+            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                return self._send(415, {"error": "Content-Type deve ser application/json"})
+
+            def save():
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > 4096:
+                    raise ValueError("corpo grande demais")
+                try:
+                    value = json.loads(self.rfile.read(length))["value"]
+                except (ValueError, KeyError, TypeError):
+                    raise ValueError('corpo deve ser {"value": "..."}')
+                with closing(connect(db_path)) as db:
+                    save_domain(db, value) if not m else save_hostname(db, m.group(1), value)
+                    return load_config(db)
+
+            self._guarded(save)
+
         def log_message(self, *args):
             pass
 
-    print(f"Lendo {app_data} — abra http://localhost:{port}", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    return ThreadingHTTPServer(("0.0.0.0", port), Handler)
+
+
+def serve(app_data, port, db_path):
+    server = make_server(app_data, port, db_path)
+    print(f"Lendo {app_data}, guardando em {db_path} — abra http://localhost:{port}", flush=True)
+    server.serve_forever()
 
 
 def main():
@@ -216,6 +305,8 @@ def main():
     parser.add_argument("--host", default=os.environ.get("UMBREL_HOST", "umbrel.local"),
                         help="IP ou nome do Umbrel, usado nos apps em rede do host")
     parser.add_argument("--serve", action="store_true", help="abre a página web em vez de imprimir")
+    parser.add_argument("--db", default=os.environ.get("TARGETS_DB", "targets.db"),
+                        help="arquivo SQLite com o domínio e os subdomínios (padrão: $TARGETS_DB ou targets.db)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
@@ -224,7 +315,7 @@ def main():
     if not Path(args.app_data).is_dir():
         sys.exit(f"Pasta não encontrada: {args.app_data}")
     if args.serve:
-        serve(args.app_data, args.port)
+        serve(args.app_data, args.port, args.db)
     else:
         print(render(scan(args.app_data), args.format, args.host))
 

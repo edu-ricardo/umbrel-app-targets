@@ -29,6 +29,8 @@ python3 targets.py /home/umbrel/umbrel/app-data --serve --port 8080
 
 A página tem busca, ordenação, cópia com um clique, seleção de linhas e exportação em CSV/Markdown. Informando o seu domínio, ela sugere um subdomínio por app (editável) e inclui na exportação.
 
+O domínio e os subdomínios que você edita ficam salvos no servidor, num SQLite (`--db` ou `TARGETS_DB`, padrão `targets.db` na pasta atual). Apps com subdomínio salvo ganham o botão **Abrir**, que leva a `https://<subdomínio>`. O IP do Umbrel e a seleção de linhas continuam só no navegador.
+
 ## Como app do Umbrel
 
 A imagem é publicada pelo workflow [`docker.yml`](.github/workflows/docker.yml) em `ghcr.io/edu-ricardo/umbrel-app-targets`. Para publicar uma versão:
@@ -52,6 +54,9 @@ services:
     restart: on-failure
     volumes:
       - ${UMBREL_ROOT}/app-data:/umbrel-app-data:ro
+      - ${APP_DATA_DIR}/data:/data
 ```
+
+A pasta `data` guarda o SQLite. O container roda como uid 1000; se o Umbrel criar `${APP_DATA_DIR}/data` como root, a escrita falha, então crie-a com esse dono no `exports.sh` ou no `pre-start` da loja.
 
 Mantenha o login do Umbrel ligado nesse app: os arquivos lidos descrevem todos os seus apps.

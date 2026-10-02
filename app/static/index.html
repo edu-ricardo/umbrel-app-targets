@@ -93,10 +93,16 @@ const store = {
 let apps = [];
 let sortKey = "name", sortDir = 1;
 const selected = new Set(store.get("selected", []));
-const hostnames = store.get("hostnames", {});
+let hostnames = {};  // apenas os subdomínios salvos no servidor
 
 $("host").value = store.get("host", "");
-$("domain").value = store.get("domain", "");
+
+async function save(path, value) {
+  const r = await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value }) });
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
 
 const host = () => $("host").value.trim() || "umbrel.local";
 const domain = () => $("domain").value.trim().replace(/^\.+/, "");
@@ -123,6 +129,7 @@ const COLUMNS = [
   { key: "port", label: "Porta no Umbrel", value: (a) => Number(a.port) || 0 },
   { key: "login", label: "Login do Umbrel", value: loginText },
   { key: "kind", label: "Tipo", value: (a) => a.kind },
+  { key: "open", label: "Externo", value: (a) => hostnames[a.id] || "" },
   { key: "others", label: "Containers", nosort: true },
 ];
 
@@ -192,6 +199,7 @@ function render() {
       <td>${a.port ? copyChip(a.port) : `<span class="empty">—</span>`}</td>
       <td>${login}</td>
       <td><span class="badge kind" title="${a.kind === "host" ? "Rede do host: use o IP do Umbrel" : a.kind === "proxy" ? "Atrás do app_proxy do Umbrel" : ""}">${esc(a.kind)}</span></td>
+      <td>${hostnames[a.id] ? `<a href="https://${esc(hostnames[a.id])}" target="_blank" rel="noopener">Abrir ↗</a>` : `<span class="empty" title="Salve um subdomínio para habilitar">—</span>`}</td>
       <td class="others" title="${esc(others)}">${esc(others)}</td>
     </tr>`;
   }).join("");
@@ -215,12 +223,23 @@ document.addEventListener("change", (e) => {
   } else if (e.target.dataset.sel) {
     e.target.checked ? selected.add(e.target.dataset.sel) : selected.delete(e.target.dataset.sel);
   } else if (e.target.dataset.host) {
-    hostnames[e.target.dataset.host] = e.target.value.trim(); store.set("hostnames", hostnames); return;
+    save(`api/hostnames/${encodeURIComponent(e.target.dataset.host)}`, e.target.value)
+      .then((c) => { hostnames = c.hostnames; toast("Salvo"); })
+      .catch((err) => toast("Não salvou: " + err.message))
+      .finally(render);
+    return;
   } else return;
   store.set("selected", [...selected]); render();
 });
 $("search").addEventListener("input", render);
-for (const id of ["host", "domain"]) $(id).addEventListener("input", () => { store.set(id, $(id).value.trim()); render(); });
+$("host").addEventListener("input", () => { store.set("host", $("host").value.trim()); render(); });
+$("domain").addEventListener("input", render);
+$("domain").addEventListener("change", () => {
+  save("api/domain", $("domain").value)
+    .then((c) => { $("domain").value = c.domain; toast("Domínio salvo"); })
+    .catch((err) => toast("Não salvou: " + err.message))
+    .finally(render);
+});
 
 $("copyCsv").onclick = () => copy(toCsv(exportRows(visible())));
 $("copyMd").onclick = () => copy(toMd(exportRows(visible())));
@@ -235,8 +254,9 @@ $("downloadCsv").onclick = () => {
   a.click(); URL.revokeObjectURL(a.href);
 };
 
-fetch("api/apps").then((r) => r.ok ? r.json() : r.json().then((e) => Promise.reject(e.error || r.statusText)))
-  .then((data) => { apps = data; render(); })
+const load = (path) => fetch(path).then((r) => r.ok ? r.json() : r.json().then((e) => Promise.reject(e.error || r.statusText)));
+Promise.all([load("api/apps"), load("api/config")])
+  .then(([data, config]) => { apps = data; hostnames = config.hostnames; $("domain").value = config.domain; render(); })
   .catch((err) => { $("status").textContent = "Não foi possível ler os apps: " + err; });
 </script>
 </body>
