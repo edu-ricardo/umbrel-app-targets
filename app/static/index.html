@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Destinos dos Apps</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e4e7ec;
+    --accent: #5b4cf0; --accent-soft: #eeecfd; --ok: #12805c; --ok-soft: #e6f6ef; --warn: #b54708; --warn-soft: #fef0e4;
+    --code: #f2f4f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1117; --panel: #171a22; --text: #e6e8ee; --muted: #9aa3b5; --line: #2a2f3b;
+      --accent: #8b80ff; --accent-soft: #252244; --ok: #4fd1a1; --ok-soft: #133328; --warn: #f6a35c; --warn-soft: #3a2614;
+      --code: #1f2330;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 20px 24px 8px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 24px; }
+  .toolbar label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+  input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; min-width: 180px; }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .spacer { flex: 1; }
+  .wrap { padding: 0 24px 24px; overflow-x: auto; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); background: var(--panel); cursor: pointer; user-select: none; position: sticky; top: 0; }
+  th.nosort { cursor: default; }
+  th .arrow { opacity: .6; margin-left: 4px; }
+  tbody tr:hover { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+  .app { display: flex; align-items: center; gap: 10px; }
+  .app img { width: 28px; height: 28px; border-radius: 7px; background: var(--code); object-fit: cover; }
+  .app small { display: block; color: var(--muted); }
+  .copy { display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  .copy:hover { border-color: var(--accent); }
+  .copy.done { border-color: var(--ok); color: var(--ok); }
+  .empty { color: var(--muted); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .badge.on { background: var(--warn-soft); color: var(--warn); }
+  .badge.off { background: var(--ok-soft); color: var(--ok); }
+  .badge.kind { background: var(--accent-soft); color: var(--accent); }
+  td.hostname input { min-width: 220px; font-family: ui-monospace, monospace; font-size: 13px; padding: 4px 8px; }
+  .others { color: var(--muted); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  .status { padding: 0 24px 8px; color: var(--muted); font-size: 12px; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: .95; }
+  @media (max-width: 640px) { header, .toolbar, .wrap, .status { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Destinos dos Apps</h1>
+  <p>Endereço interno de cada app instalado no Umbrel — use como <em>Service</em> no Cloudflare Tunnel ou no DockFlare.</p>
+</header>
+
+<div class="toolbar">
+  <label>Buscar<input id="search" type="text" placeholder="nome, id ou container"></label>
+  <label>IP do Umbrel <span>(apps em rede do host)</span><input id="host" type="text" placeholder="192.168.0.10"></label>
+  <label>Seu domínio <span>(opcional)</span><input id="domain" type="text" placeholder="meudominio.com"></label>
+  <span class="spacer"></span>
+  <button id="copySelected">Copiar selecionados</button>
+  <button id="copyMd">Copiar Markdown</button>
+  <button id="copyCsv">Copiar CSV</button>
+  <button id="downloadCsv" class="primary">Baixar CSV</button>
+</div>
+<div class="status" id="status">Carregando…</div>
+
+<div class="wrap">
+  <table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+let apps = [];
+let sortKey = "name", sortDir = 1;
+const selected = new Set(store.get("selected", []));
+const hostnames = store.get("hostnames", {});
+
+$("host").value = store.get("host", "");
+$("domain").value = store.get("domain", "");
+
+const host = () => $("host").value.trim() || "umbrel.local";
+const domain = () => $("domain").value.trim().replace(/^\.+/, "");
+
+function target(a) {
+  if (a.target) return a.target;
+  if (a.kind === "host" && a.port) return `http://${host()}:${a.port}`;
+  return "";
+}
+function shortName(a) {
+  return a.id.replace(/^florencio-store-/, "").replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+}
+function hostname(a) {
+  if (!domain()) return "";
+  return hostnames[a.id] || `${shortName(a)}.${domain()}`;
+}
+const loginText = (a) => a.umbrel_login === true ? "sim" : a.umbrel_login === false ? "não" : "-";
+
+const COLUMNS = [
+  { key: "sel", label: "", nosort: true },
+  { key: "name", label: "App", value: (a) => a.name.toLowerCase() },
+  { key: "target", label: "Destino", value: target },
+  { key: "hostname", label: "Subdomínio", value: hostname, needsDomain: true },
+  { key: "port", label: "Porta no Umbrel", value: (a) => Number(a.port) || 0 },
+  { key: "login", label: "Login do Umbrel", value: loginText },
+  { key: "kind", label: "Tipo", value: (a) => a.kind },
+  { key: "others", label: "Containers", nosort: true },
+];
+
+function exportRows(list) {
+  const header = ["App", "ID", "Destino", ...(domain() ? ["Subdomínio"] : []), "Porta no Umbrel", "Login do Umbrel", "Tipo"];
+  const rows = list.map((a) => [a.name, a.id, target(a), ...(domain() ? [hostname(a)] : []), a.port || "", loginText(a), a.kind]);
+  return [header, ...rows];
+}
+const toCsv = (rows) => rows.map((r) => r.map((c) => /[",\n]/.test(c) ? `"${String(c).replace(/"/g, '""')}"` : c).join(",")).join("\n");
+const toMd = (rows) => [
+  `| ${rows[0].join(" | ")} |`, `|${rows[0].map(() => "---").join("|")}|`,
+  ...rows.slice(1).map((r) => `| ${r.map((c) => String(c).replace(/\|/g, "\\|")).join(" | ")} |`),
+].join("\n");
+
+function visible() {
+  const q = $("search").value.trim().toLowerCase();
+  const col = COLUMNS.find((c) => c.key === sortKey);
+  return apps
+    .filter((a) => !q || [a.name, a.id, target(a), ...a.containers.map((c) => c.container)].join(" ").toLowerCase().includes(q))
+    .sort((x, y) => {
+      const a = col.value(x), b = col.value(y);
+      return (a > b ? 1 : a < b ? -1 : 0) * sortDir;
+    });
+}
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 1400);
+}
+async function copy(text, el) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  if (el) { el.classList.add("done"); setTimeout(() => el.classList.remove("done"), 900); }
+  toast("Copiado");
+}
+function copyChip(text) {
+  if (!text) return `<span class="empty">—</span>`;
+  const safe = text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  return `<span class="copy" data-copy="${safe.replace(/"/g, "&quot;")}" title="Clique para copiar">${safe}</span>`;
+}
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+
+function renderHead() {
+  $("head").innerHTML = COLUMNS.filter((c) => !c.needsDomain || domain()).map((c) => {
+    if (c.key === "sel") return `<th class="nosort"><input type="checkbox" id="selAll" title="Selecionar todos"></th>`;
+    const arrow = c.key === sortKey ? `<span class="arrow">${sortDir > 0 ? "▲" : "▼"}</span>` : "";
+    return `<th data-key="${c.key}" class="${c.nosort ? "nosort" : ""}">${c.label}${arrow}</th>`;
+  }).join("");
+}
+
+function render() {
+  renderHead();
+  const list = visible();
+  $("rows").innerHTML = list.map((a) => {
+    const others = a.containers.map((c) => c.container + (c.published_ports.length ? ` (${c.published_ports.join(", ")})` : "")).join(", ");
+    const login = a.umbrel_login === true ? `<span class="badge on" title="O login do Umbrel fica na frente">sim</span>`
+      : a.umbrel_login === false ? `<span class="badge off">não</span>` : `<span class="empty">—</span>`;
+    return `<tr>
+      <td><input type="checkbox" data-sel="${esc(a.id)}" ${selected.has(a.id) ? "checked" : ""}></td>
+      <td><div class="app"><img src="${esc(a.icon)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+        <div>${esc(a.name)}<small>${esc(a.id)}${a.error ? " · erro: " + esc(a.error) : ""}</small></div></div></td>
+      <td>${copyChip(target(a))}</td>
+      ${domain() ? `<td class="hostname"><input type="text" data-host="${esc(a.id)}" value="${esc(hostname(a))}"></td>` : ""}
+      <td>${a.port ? copyChip(a.port) : `<span class="empty">—</span>`}</td>
+      <td>${login}</td>
+      <td><span class="badge kind" title="${a.kind === "host" ? "Rede do host: use o IP do Umbrel" : a.kind === "proxy" ? "Atrás do app_proxy do Umbrel" : ""}">${esc(a.kind)}</span></td>
+      <td class="others" title="${esc(others)}">${esc(others)}</td>
+    </tr>`;
+  }).join("");
+  const all = $("selAll");
+  if (all) all.checked = list.length > 0 && list.every((a) => selected.has(a.id));
+  $("status").textContent = `${list.length} de ${apps.length} apps · ${selected.size} selecionado(s)`;
+}
+
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest(".copy");
+  if (chip) return copy(chip.dataset.copy, chip);
+  const th = e.target.closest("th[data-key]");
+  if (th && !th.classList.contains("nosort")) {
+    sortDir = sortKey === th.dataset.key ? -sortDir : 1;
+    sortKey = th.dataset.key; render();
+  }
+});
+document.addEventListener("change", (e) => {
+  if (e.target.id === "selAll") {
+    visible().forEach((a) => e.target.checked ? selected.add(a.id) : selected.delete(a.id));
+  } else if (e.target.dataset.sel) {
+    e.target.checked ? selected.add(e.target.dataset.sel) : selected.delete(e.target.dataset.sel);
+  } else if (e.target.dataset.host) {
+    hostnames[e.target.dataset.host] = e.target.value.trim(); store.set("hostnames", hostnames); return;
+  } else return;
+  store.set("selected", [...selected]); render();
+});
+$("search").addEventListener("input", render);
+for (const id of ["host", "domain"]) $(id).addEventListener("input", () => { store.set(id, $(id).value.trim()); render(); });
+
+$("copyCsv").onclick = () => copy(toCsv(exportRows(visible())));
+$("copyMd").onclick = () => copy(toMd(exportRows(visible())));
+$("copySelected").onclick = () => {
+  const list = visible().filter((a) => selected.has(a.id));
+  if (!list.length) return toast("Nenhum app selecionado");
+  copy(toMd(exportRows(list)));
+};
+$("downloadCsv").onclick = () => {
+  const blob = new Blob(["﻿" + toCsv(exportRows(visible()))], { type: "text/csv;charset=utf-8" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "destinos-umbrel.csv" });
+  a.click(); URL.revokeObjectURL(a.href);
+};
+
+fetch("api/apps").then((r) => r.ok ? r.json() : r.json().then((e) => Promise.reject(e.error || r.statusText)))
+  .then((data) => { apps = data; render(); })
+  .catch((err) => { $("status").textContent = "Não foi possível ler os apps: " + err; });
+</script>
+</body>
+</html>
