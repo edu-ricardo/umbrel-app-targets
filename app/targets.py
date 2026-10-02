@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -30,8 +31,9 @@ GALLERY_ICON = "https://getumbrel.github.io/umbrel-apps-gallery/{id}/icon.svg"
 
 def _scalar(text, key, indent=""):
     """Valor de `key: valor` (aspas opcionais) com a indentação dada."""
-    m = re.search(rf'^{indent}{re.escape(key)}:[ \t]*["\']?([^"\'\n#]*?)["\']?[ \t]*(?:#.*)?$', text, re.M)
-    return m.group(1).strip() if m else ""
+    m = re.search(rf'^{indent}{re.escape(key)}:[ \t]*(?:"([^"\n]*)"|\'([^\'\n]*)\'|([^\n]*?))[ \t]*(?:[ \t]#.*)?$',
+                  text, re.M)
+    return next(g for g in m.groups() if g is not None).strip() if m else ""
 
 
 def _env(text, key):
@@ -77,7 +79,8 @@ def read_app(folder):
         manifest = manifest_path.read_text(encoding="utf-8", errors="replace")
         compose = compose_path.read_text(encoding="utf-8", errors="replace") if compose_path.is_file() else ""
     except OSError as e:
-        return {"id": folder.name, "name": folder.name, "error": str(e)}
+        return {"id": folder.name, "name": folder.name, "error": str(e), "icon": "", "port": "", "path": "",
+                "kind": "outro", "target": "", "umbrel_login": None, "containers": []}
 
     app_id = _scalar(manifest, "id") or folder.name
     services = _services(compose)
@@ -91,8 +94,9 @@ def read_app(folder):
         if name == "app_proxy":
             continue
         container = _scalar(block, "container_name", r"\s+") or f"{app_id}_{name}_1"
+        ports_block = re.search(r"^[ \t]*ports:[ \t]*\n((?:[ \t]*-[^\n]*(?:\n|$))+)", block, re.M)
         ports = re.findall(r'^\s*-\s*["\']?([\d-]+(?::[\d-]+)?(?::[\d-]+)?(?:/\w+)?)["\']?\s*$',
-                           block.split("ports:", 1)[1] if "ports:" in block else "", re.M)
+                           ports_block.group(1) if ports_block else "", re.M)
         containers.append({"service": name, "container": container,
                            "host_network": "network_mode" in block and "host" in _scalar(block, "network_mode", r"\s+"),
                            "published_ports": ports})
@@ -187,7 +191,8 @@ def serve(app_data, port):
             if path == "/api/apps":
                 try:
                     self._send(200, json.dumps(scan(app_data), ensure_ascii=False), "application/json; charset=utf-8")
-                except OSError as e:
+                except Exception as e:
+                    traceback.print_exc()
                     self._send(500, json.dumps({"error": str(e)}), "application/json; charset=utf-8")
             elif path == "/health":
                 self._send(200, "ok", "text/plain")
