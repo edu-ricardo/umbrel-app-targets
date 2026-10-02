@@ -184,13 +184,15 @@ def connect(path):
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS hostnames (app_id TEXT PRIMARY KEY, hostname TEXT NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS unpublished (app_id TEXT PRIMARY KEY)")
     return db
 
 
 def load_config(db):
     row = db.execute("SELECT value FROM settings WHERE key = 'domain'").fetchone()
     return {"domain": row[0] if row else "",
-            "hostnames": dict(db.execute("SELECT app_id, hostname FROM hostnames"))}
+            "hostnames": dict(db.execute("SELECT app_id, hostname FROM hostnames")),
+            "unpublished": [r[0] for r in db.execute("SELECT app_id FROM unpublished ORDER BY app_id")]}
 
 
 def _hostname(value):
@@ -219,6 +221,18 @@ def save_hostname(db, app_id, value):
             db.execute("INSERT OR REPLACE INTO hostnames VALUES (?, ?)", (app_id, value))
         else:
             db.execute("DELETE FROM hostnames WHERE app_id = ?", (app_id,))
+
+
+def save_unpublished(db, app_id, flag):
+    if not APP_ID_RE.match(app_id):
+        raise ValueError(f"id de app inválido: {app_id}")
+    if not isinstance(flag, bool):
+        raise ValueError("valor deve ser true ou false")
+    with db:
+        if flag:
+            db.execute("INSERT OR REPLACE INTO unpublished VALUES (?)", (app_id,))
+        else:
+            db.execute("DELETE FROM unpublished WHERE app_id = ?", (app_id,))
 
 
 def make_server(app_data, port, db_path):
@@ -264,7 +278,7 @@ def make_server(app_data, port, db_path):
 
         def do_PUT(self):
             path = self.path.split("?", 1)[0]
-            m = re.fullmatch(r"/api/hostnames/([^/]+)", path)
+            m = re.fullmatch(r"/api/(hostnames|unpublished)/([^/]+)", path)
             if path != "/api/domain" and not m:
                 return self._send(404, {"error": "not found"})
             # Só JSON: o preflight do navegador impede escrita vinda de outros sites
@@ -280,7 +294,12 @@ def make_server(app_data, port, db_path):
                 except (ValueError, KeyError, TypeError):
                     raise ValueError('corpo deve ser {"value": "..."}')
                 with closing(connect(db_path)) as db:
-                    save_domain(db, value) if not m else save_hostname(db, m.group(1), value)
+                    if not m:
+                        save_domain(db, value)
+                    elif m.group(1) == "hostnames":
+                        save_hostname(db, m.group(2), value)
+                    else:
+                        save_unpublished(db, m.group(2), value)
                     return load_config(db)
 
             self._guarded(save)

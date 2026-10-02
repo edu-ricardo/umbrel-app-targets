@@ -85,7 +85,7 @@ class ConfigStoreTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_empty_config(self):
-        self.assertEqual(targets.load_config(self.db), {"domain": "", "hostnames": {}})
+        self.assertEqual(targets.load_config(self.db), {"domain": "", "hostnames": {}, "unpublished": []})
 
     def test_domain_is_normalized_saved_and_cleared(self):
         targets.save_domain(self.db, " MeuDominio.com ")
@@ -99,6 +99,20 @@ class ConfigStoreTest(unittest.TestCase):
         self.assertEqual(targets.load_config(self.db)["hostnames"], {"a1": "b.meudominio.com"})
         targets.save_hostname(self.db, "a1", "")
         self.assertEqual(targets.load_config(self.db)["hostnames"], {})
+
+    def test_unpublished_flag_set_and_cleared(self):
+        targets.save_unpublished(self.db, "b", True)
+        targets.save_unpublished(self.db, "a", True)
+        targets.save_unpublished(self.db, "a", True)
+        self.assertEqual(targets.load_config(self.db)["unpublished"], ["a", "b"])
+        targets.save_unpublished(self.db, "a", False)
+        self.assertEqual(targets.load_config(self.db)["unpublished"], ["b"])
+
+    def test_unpublished_requires_boolean_and_valid_id(self):
+        with self.assertRaises(ValueError):
+            targets.save_unpublished(self.db, "a", "true")
+        with self.assertRaises(ValueError):
+            targets.save_unpublished(self.db, "../x", True)
 
     def test_invalid_values_are_rejected(self):
         for bad in ("sem-ponto", "http://x.com", "a b.com", "x.com/path", "-a.com"):
@@ -142,8 +156,17 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(self.put("/api/domain", "meudominio.com")[0], 200)
         status, config = self.put("/api/hostnames/a1", "a1.meudominio.com")
         self.assertEqual(status, 200)
-        self.assertEqual(config, {"domain": "meudominio.com", "hostnames": {"a1": "a1.meudominio.com"}})
+        self.assertEqual(config, {"domain": "meudominio.com", "hostnames": {"a1": "a1.meudominio.com"},
+                                  "unpublished": []})
         self.assertEqual(self.get("/api/config"), config)
+
+    def test_unpublished_round_trip(self):
+        status, config = self.put("/api/unpublished/a1", True)
+        self.assertEqual((status, config["unpublished"]), (200, ["a1"]))
+        self.assertEqual(self.put("/api/unpublished/a1", False)[1]["unpublished"], [])
+
+    def test_unpublished_rejects_non_boolean(self):
+        self.assertEqual(self.put("/api/unpublished/a1", "sim")[0], 400)
 
     def test_invalid_value_is_400(self):
         status, body = self.put("/api/domain", "invalido")

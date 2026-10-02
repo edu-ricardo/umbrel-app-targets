@@ -25,6 +25,7 @@
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 24px; }
   .toolbar label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
   input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; min-width: 180px; }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
   input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
   button:hover { border-color: var(--accent); }
@@ -49,6 +50,9 @@
   .badge.on { background: var(--warn-soft); color: var(--warn); }
   .badge.off { background: var(--ok-soft); color: var(--ok); }
   .badge.kind { background: var(--accent-soft); color: var(--accent); }
+  td.hostname input.saved { border-color: var(--ok); }
+  tr.off td { opacity: .55; }
+  tr.off td:first-child, tr.off td.pub { opacity: 1; }
   td.hostname input { min-width: 220px; font-family: ui-monospace, monospace; font-size: 13px; padding: 4px 8px; }
   .others { color: var(--muted); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
   .status { padding: 0 24px 8px; color: var(--muted); font-size: 12px; }
@@ -66,7 +70,14 @@
 <div class="toolbar">
   <label>Buscar<input id="search" type="text" placeholder="nome, id ou container"></label>
   <label>IP do Umbrel <span>(apps em rede do host)</span><input id="host" type="text" placeholder="192.168.0.10"></label>
-  <label>Seu domínio <span>(opcional)</span><input id="domain" type="text" placeholder="meudominio.com"></label>
+  <label>Seu domínio <span>(completa os subdomínios)</span><input id="domain" type="text" placeholder="meudominio.com"></label>
+  <label>Exibir
+    <select id="view">
+      <option value="all">Todos</option>
+      <option value="published">Só publicados</option>
+      <option value="unpublished">Só não publicados</option>
+    </select>
+  </label>
   <span class="spacer"></span>
   <button id="copySelected">Copiar selecionados</button>
   <button id="copyMd">Copiar Markdown</button>
@@ -81,6 +92,7 @@
     <tbody id="rows"></tbody>
   </table>
 </div>
+<datalist id="subdomains"></datalist>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -94,8 +106,10 @@ let apps = [];
 let sortKey = "name", sortDir = 1;
 const selected = new Set(store.get("selected", []));
 let hostnames = {};  // apenas os subdomínios salvos no servidor
+let unpublished = new Set();
 
 $("host").value = store.get("host", "");
+$("view").value = store.get("view", "all");
 
 async function save(path, value) {
   const r = await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value }) });
@@ -112,12 +126,12 @@ function target(a) {
   if (a.kind === "host" && a.port) return `http://${host()}:${a.port}`;
   return "";
 }
-function shortName(a) {
-  return a.id.replace(/^florencio-store-/, "").replace(/[^a-z0-9-]/gi, "-").toLowerCase();
-}
-function hostname(a) {
-  if (!domain()) return "";
-  return hostnames[a.id] || `${shortName(a)}.${domain()}`;
+const hostname = (a) => hostnames[a.id] || "";
+const isPublished = (a) => !unpublished.has(a.id);
+// "bob" vira "bob.meudominio.com"; o que já tem domínio (ou ponto no meio) fica como está
+function complete(value) {
+  const v = value.trim().toLowerCase().replace(/\.+$/, "");
+  return v && domain() && !v.includes(".") ? `${v}.${domain()}` : v;
 }
 const loginText = (a) => a.umbrel_login === true ? "sim" : a.umbrel_login === false ? "não" : "-";
 
@@ -125,17 +139,18 @@ const COLUMNS = [
   { key: "sel", label: "", nosort: true },
   { key: "name", label: "App", value: (a) => a.name.toLowerCase() },
   { key: "target", label: "Destino", value: target },
-  { key: "hostname", label: "Subdomínio", value: hostname, needsDomain: true },
+  { key: "hostname", label: "Subdomínio", value: hostname },
+  { key: "published", label: "Publicado", value: (a) => isPublished(a) },
   { key: "port", label: "Porta no Umbrel", value: (a) => Number(a.port) || 0 },
   { key: "login", label: "Login do Umbrel", value: loginText },
   { key: "kind", label: "Tipo", value: (a) => a.kind },
-  { key: "open", label: "Externo", value: (a) => hostnames[a.id] || "" },
+  { key: "open", label: "Externo", value: (a) => (isPublished(a) && hostnames[a.id]) || "" },
   { key: "others", label: "Containers", nosort: true },
 ];
 
 function exportRows(list) {
-  const header = ["App", "ID", "Destino", ...(domain() ? ["Subdomínio"] : []), "Porta no Umbrel", "Login do Umbrel", "Tipo"];
-  const rows = list.map((a) => [a.name, a.id, target(a), ...(domain() ? [hostname(a)] : []), a.port || "", loginText(a), a.kind]);
+  const header = ["App", "ID", "Destino", "Subdomínio", "Porta no Umbrel", "Login do Umbrel", "Tipo"];
+  const rows = list.map((a) => [a.name, a.id, target(a), hostname(a), a.port || "", loginText(a), a.kind]);
   return [header, ...rows];
 }
 const toCsv = (rows) => rows.map((r) => r.map((c) => /[",\n]/.test(c) ? `"${String(c).replace(/"/g, '""')}"` : c).join(",")).join("\n");
@@ -147,7 +162,9 @@ const toMd = (rows) => [
 function visible() {
   const q = $("search").value.trim().toLowerCase();
   const col = COLUMNS.find((c) => c.key === sortKey);
+  const view = $("view").value;
   return apps
+    .filter((a) => view === "all" || (view === "published") === isPublished(a))
     .filter((a) => !q || [a.name, a.id, target(a), ...a.containers.map((c) => c.container)].join(" ").toLowerCase().includes(q))
     .sort((x, y) => {
       const a = col.value(x), b = col.value(y);
@@ -176,7 +193,7 @@ function copyChip(text) {
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
 function renderHead() {
-  $("head").innerHTML = COLUMNS.filter((c) => !c.needsDomain || domain()).map((c) => {
+  $("head").innerHTML = COLUMNS.map((c) => {
     if (c.key === "sel") return `<th class="nosort"><input type="checkbox" id="selAll" title="Selecionar todos"></th>`;
     const arrow = c.key === sortKey ? `<span class="arrow">${sortDir > 0 ? "▲" : "▼"}</span>` : "";
     return `<th data-key="${c.key}" class="${c.nosort ? "nosort" : ""}">${c.label}${arrow}</th>`;
@@ -190,16 +207,17 @@ function render() {
     const others = a.containers.map((c) => c.container + (c.published_ports.length ? ` (${c.published_ports.join(", ")})` : "")).join(", ");
     const login = a.umbrel_login === true ? `<span class="badge on" title="O login do Umbrel fica na frente">sim</span>`
       : a.umbrel_login === false ? `<span class="badge off">não</span>` : `<span class="empty">—</span>`;
-    return `<tr>
+    return `<tr class="${isPublished(a) ? "" : "off"}">
       <td><input type="checkbox" data-sel="${esc(a.id)}" ${selected.has(a.id) ? "checked" : ""}></td>
       <td><div class="app"><img src="${esc(a.icon)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
         <div>${esc(a.name)}<small>${esc(a.id)}${a.error ? " · erro: " + esc(a.error) : ""}</small></div></div></td>
       <td>${copyChip(target(a))}</td>
-      ${domain() ? `<td class="hostname"><input type="text" data-host="${esc(a.id)}" value="${esc(hostname(a))}"></td>` : ""}
+      <td class="hostname"><input type="text" list="subdomains" data-host="${esc(a.id)}" class="${hostname(a) ? "saved" : ""}" value="${esc(hostname(a))}" placeholder="${domain() ? "subdomínio" : "defina o domínio"}"></td>
+      <td class="pub"><input type="checkbox" data-pub="${esc(a.id)}" ${isPublished(a) ? "checked" : ""} title="Desmarque para marcar como não publicado"></td>
       <td>${a.port ? copyChip(a.port) : `<span class="empty">—</span>`}</td>
       <td>${login}</td>
       <td><span class="badge kind" title="${a.kind === "host" ? "Rede do host: use o IP do Umbrel" : a.kind === "proxy" ? "Atrás do app_proxy do Umbrel" : ""}">${esc(a.kind)}</span></td>
-      <td>${hostnames[a.id] ? `<a href="https://${esc(hostnames[a.id])}" target="_blank" rel="noopener">Abrir ↗</a>` : `<span class="empty" title="Salve um subdomínio para habilitar">—</span>`}</td>
+      <td>${hostnames[a.id] && isPublished(a) ? `<a href="https://${esc(hostnames[a.id])}" target="_blank" rel="noopener">Abrir ↗</a>` : `<span class="empty" title="Precisa de subdomínio salvo e app publicado">—</span>`}</td>
       <td class="others" title="${esc(others)}">${esc(others)}</td>
     </tr>`;
   }).join("");
@@ -222,8 +240,14 @@ document.addEventListener("change", (e) => {
     visible().forEach((a) => e.target.checked ? selected.add(a.id) : selected.delete(a.id));
   } else if (e.target.dataset.sel) {
     e.target.checked ? selected.add(e.target.dataset.sel) : selected.delete(e.target.dataset.sel);
+  } else if (e.target.dataset.pub) {
+    save(`api/unpublished/${encodeURIComponent(e.target.dataset.pub)}`, !e.target.checked)
+      .then((c) => { unpublished = new Set(c.unpublished); })
+      .catch((err) => toast("Não salvou: " + err.message))
+      .finally(render);
+    return;
   } else if (e.target.dataset.host) {
-    save(`api/hostnames/${encodeURIComponent(e.target.dataset.host)}`, e.target.value)
+    save(`api/hostnames/${encodeURIComponent(e.target.dataset.host)}`, complete(e.target.value))
       .then((c) => { hostnames = c.hostnames; toast("Salvo"); })
       .catch((err) => toast("Não salvou: " + err.message))
       .finally(render);
@@ -233,7 +257,12 @@ document.addEventListener("change", (e) => {
 });
 $("search").addEventListener("input", render);
 $("host").addEventListener("input", () => { store.set("host", $("host").value.trim()); render(); });
-$("domain").addEventListener("input", render);
+$("view").addEventListener("change", () => { store.set("view", $("view").value); render(); });
+document.addEventListener("input", (e) => {
+  if (!e.target.dataset.host) return;
+  const v = e.target.value.trim().toLowerCase().replace(/\.+$/, "");
+  $("subdomains").innerHTML = v && domain() && !v.includes(".") ? `<option value="${esc(v)}.${esc(domain())}">` : "";
+});
 $("domain").addEventListener("change", () => {
   save("api/domain", $("domain").value)
     .then((c) => { $("domain").value = c.domain; toast("Domínio salvo"); })
@@ -256,7 +285,7 @@ $("downloadCsv").onclick = () => {
 
 const load = (path) => fetch(path).then((r) => r.ok ? r.json() : r.json().then((e) => Promise.reject(e.error || r.statusText)));
 Promise.all([load("api/apps"), load("api/config")])
-  .then(([data, config]) => { apps = data; hostnames = config.hostnames; $("domain").value = config.domain; render(); })
+  .then(([data, config]) => { apps = data; hostnames = config.hostnames; unpublished = new Set(config.unpublished); $("domain").value = config.domain; render(); })
   .catch((err) => { $("status").textContent = "Não foi possível ler os apps: " + err; });
 </script>
 </body>

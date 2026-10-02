@@ -27,9 +27,9 @@ Outros formatos: `--format csv`, `--format markdown` ou `--format json`. Para os
 python3 targets.py /home/umbrel/umbrel/app-data --serve --port 8080
 ```
 
-A página tem busca, ordenação, cópia com um clique, seleção de linhas e exportação em CSV/Markdown. Informando o seu domínio, ela sugere um subdomínio por app (editável) e inclui na exportação.
+A página tem busca, ordenação, cópia com um clique, seleção de linhas e exportação em CSV/Markdown. Informando o seu domínio, ao digitar um subdomínio (`bob`) ele é completado (`bob.meudominio.com`); nada é gerado automaticamente.
 
-O domínio e os subdomínios que você edita ficam salvos no servidor, num SQLite (`--db` ou `TARGETS_DB`, padrão `targets.db` na pasta atual). Apps com subdomínio salvo ganham o botão **Abrir**, que leva a `https://<subdomínio>`. O IP do Umbrel e a seleção de linhas continuam só no navegador.
+O domínio e os subdomínios que você edita ficam salvos no servidor, num SQLite (`--db` ou `TARGETS_DB`, padrão `targets.db` na pasta atual). Apps com subdomínio salvo ganham o botão **Abrir**, que leva a `https://<subdomínio>`. Dá para marcar apps como não publicados (desmarcando **Publicado**) e filtrá-los em **Exibir**; eles não mostram o botão Abrir. O IP do Umbrel e a seleção de linhas continuam só no navegador.
 
 ## Como app do Umbrel
 
